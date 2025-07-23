@@ -423,11 +423,39 @@ argsp.add_argument("commit",
 
 def cmd_log(args):
     repo = repo_find()
+    sha = object_find(repo, args.commit)  # start from HEAD by default
+    seen = set()
+    log_plain(repo, sha, seen)
 
-    print("digraph vcsxlog{")
-    print("  node[shape=rect]")
-    log_graphviz(repo, object_find(repo, args.commit), set())
-    print("}")
+def log_plain(repo, sha, seen):
+    if sha in seen:
+        return
+    seen.add(sha)
+
+    commit = object_read(repo, sha)
+    assert commit.fmt == b"commit"
+
+    # Extract metadata
+    author = commit.kvlm.get(b"author", b"unknown").decode("utf-8")
+    committer = commit.kvlm.get(b"committer", b"unknown").decode("utf-8")
+    message = commit.kvlm[None].decode("utf-8").strip()
+
+    # Print like git log
+    print(f"commit {sha}")
+    print(f"Author: {author}")
+    print(f"Committer: {committer}")
+    print()
+    print(f"    {message}")
+    print()
+
+    # Traverse parents recursively
+    parents = commit.kvlm.get(b"parent", [])
+    if isinstance(parents, bytes):
+        parents = [parents]  # normalize to list
+
+    for p in parents:
+        log_plain(repo, p.decode("utf-8"), seen)
+
 
 def log_graphviz(repo, sha, seen):
 
@@ -1169,19 +1197,26 @@ def tree_to_dict(repo, ref, prefix=""):
 def cmd_status_head_index(repo, index):
     print("Changes to be committed:")
 
-    head = tree_to_dict(repo, "HEAD")
+    try:
+        # Try to get HEAD tree
+        head = tree_to_dict(repo, "HEAD")
+    except Exception:
+        # No HEAD yet → list everything in the index as "new file"
+        for entry in index.entries:
+            print("  new file:", entry.name)
+        return
+
+    # Normal comparison if HEAD exists
     for entry in index.entries:
         if entry.name in head:
             if head[entry.name] != entry.sha:
                 print("  modified:", entry.name)
-            del head[entry.name] # Delete the key
+            del head[entry.name]
         else:
-            print("  added:   ", entry.name)
+            print("  added:", entry.name)
 
-    # Keys still in HEAD are files that we haven't met in the index,
-    # and thus have been deleted.
     for entry in head.keys():
-        print("  deleted: ", entry)
+        print("  deleted:", entry)
 
 def cmd_status_index_worktree(repo, index):
     print("Changes not staged for commit:")
